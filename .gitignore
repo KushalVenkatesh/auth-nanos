@@ -1,0 +1,7 @@
+*.db
+go.mod
+go.sum
+main.go
+*.exe
+*/*.db
+.idea

@@ -5,6 +5,7 @@ import (
 	"auth-nanos/entities"
 	"encoding/binary"
 	"github.com/bashar-saleh/gonanos/nanos"
+	"regexp"
 	"testing"
 	"time"
 )
@@ -12,8 +13,15 @@ import (
 var failure = "\u2717"
 var succeed = "\u2713"
 
-func TestRegisterNewUser(t *testing.T) {
 
+
+func TestRegisterUser(t *testing.T) {
+	t.Run("testValidationRules", testValidationRules)
+	t.Run("When register an existed user Then error must be return And contains msg of //exist before//", registerExistedUser)
+	t.Run("When register a new user Then the id should be return", registerNewUser)
+}
+
+func testValidationRules(t *testing.T) {
 	data := []struct {
 		user                    entities.User
 		id                      int64
@@ -283,7 +291,7 @@ func TestRegisterNewUser(t *testing.T) {
 	for i := range data {
 		t.Logf("\ttesting User: %v ", data[i].user)
 		{
-			db := datastores.SqliteConnection()
+			db := datastores.SqliteConnection("test.db")
 
 			mailBox := NewRegisterUserNanos(
 				1,
@@ -313,16 +321,91 @@ func TestRegisterNewUser(t *testing.T) {
 			case resMsg := <-resTo:
 				var id = int64(binary.LittleEndian.Uint64(resMsg.Content))
 				if id != data[i].id {
-					t.Logf("\t\t%s\t [False] - data[%v].id != %v", failure, data[i].id, id)
+					t.Errorf("\t\t%s\t [False] - data[%v].id != %v", failure, data[i].id, id)
 				}
 				t.Logf("\t\t%s\t [Pass]", succeed)
-			case errMsg := <-errTo:
-				t.Logf("\t\t%s\t [Error] - data[%v] - %s", failure, i, errMsg)
+			case err := <-errTo:
+				matched, _ := regexp.MatchString("length", err.Error())
+				if !matched {
+					t.Errorf("\t\t%s\t [Error] - data[%v] - %s", failure, i, "Nanos should return error msg with phrase // length //")
+				}
+				t.Logf("\t\t%s\t [Error] - data[%v] - %s", succeed, i, err.Error())
 
 			case <-time.After(time.Second * 2):
-				t.Logf("\t\t%s\t [Timeout] - data[%v] ", failure, i)
+				t.Errorf("\t\t%s\t [Timeout] - data[%v] ", failure, i)
 
 			}
 		}
 	}
+}
+
+func registerNewUser(t *testing.T) {
+	db := datastores.SqliteConnection("test.db")
+	mailBox := NewRegisterUserNanos(1, 2000, db, nil, nil, nil, nil, nil)
+	user := entities.User{
+		Name:     "Bashar Saleh",
+		Username: "Roba",
+		Email:    "bashar.saleh.992@gmail.com",
+		Phone:    "+963991347770",
+		Password: "123123",
+		Roles:    []string{"user"},
+	}
+	var resTo = make(chan nanos.Message)
+	var errTo = make(chan error)
+
+	rawUser, _ := user.ToByte()
+
+	mailBox <- nanos.Message{Content: rawUser, ResTo: resTo, ErrTo: errTo,}
+
+	select {
+	case _ = <-errTo:
+		t.Error("Nanos should not return any error")
+	case res := <-resTo:
+		id := int64(binary.LittleEndian.Uint64(res.Content))
+		if id != 1 {
+			t.Error("Nanos should return id 1")
+		}
+	}
+
+}
+
+func registerExistedUser(t *testing.T) {
+	db := datastores.SqliteConnection("test.db")
+	mailBox := NewRegisterUserNanos(1, 2000, db, nil, nil, nil, nil, nil)
+	user := entities.User{
+		Name:     "Bashar Saleh",
+		Username: "Roba",
+		Email:    "bashar.saleh.992@gmail.com",
+		Phone:    "+963991347770",
+		Password: "123123",
+		Roles:    []string{"user"},
+	}
+	rawUser, _ := user.ToByte()
+	mailBox <- nanos.Message{Content: rawUser}
+
+	newUser := entities.User{
+		Name:     "Bashar Saleh",
+		Username: "Roba",
+		Email:    "bashar.saleh.992@gmail.com",
+		Phone:    "+963991347770",
+		Password: "123123",
+		Roles:    []string{"user"},
+	}
+	var resTo = make(chan nanos.Message)
+	var errTo = make(chan error)
+
+	rawUser, _ = newUser.ToByte()
+	mailBox <- nanos.Message{Content: rawUser, ResTo: resTo, ErrTo: errTo,}
+
+	select {
+	case _ = <-resTo:
+		t.Error("Nanos should not return any response")
+	case err := <-errTo:
+		matched, _ := regexp.MatchString("exist before", err.Error())
+		if !matched {
+
+			t.Error("Nanos should return msg with //exist before//")
+		}
+	}
+
 }

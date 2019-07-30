@@ -4,6 +4,7 @@ import (
 	"auth-nanos/entities"
 	"database/sql"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"github.com/bashar-saleh/gonanos/nanos"
 	"log"
@@ -22,12 +23,12 @@ func NewRegisterUserNanos(
 ) chan nanos.Message {
 
 	worker := &registerUserWorker{
-		db: db,
-		nameValidationRules:nameValidationRules,
-		emailValidationRules:emailValidationRules,
-		passwordValidationRules:passwordValidationRules,
-		phoneValidationRules:phoneValidationRules,
-		usernameValidationRules:usernameValidationRules,
+		db:                      db,
+		nameValidationRules:     nameValidationRules,
+		emailValidationRules:    emailValidationRules,
+		passwordValidationRules: passwordValidationRules,
+		phoneValidationRules:    phoneValidationRules,
+		usernameValidationRules: usernameValidationRules,
 	}
 
 	worker.prepareStore()
@@ -129,6 +130,62 @@ func (w *registerUserWorker) Work(msg nanos.Message) {
 		}
 	}
 
+	// check if the username or email or phone exist before
+	q := "SELECT username, email, phone FROM users WHERE "
+	var qValus []interface{}
+
+	if userData.Username != "" {
+		q += "(username = ?) "
+		qValus = append(qValus, userData.Username)
+	} else {
+		q += "(0 = 1) "
+	}
+	if userData.Email != "" {
+		q += "OR (email = ?) "
+		qValus = append(qValus, userData.Email)
+	} else {
+		q += "OR (1 = 0) "
+	}
+	if userData.Phone != "" {
+		q += "OR (phone = ?) "
+		qValus = append(qValus, userData.Phone)
+	} else {
+		q += "OR (1 = 0) "
+	}
+
+	rows, err := w.db.Query(q, qValus...)
+	if err != nil {
+		select {
+		case msg.ErrTo <- err:
+			return
+		default:
+			return
+		}
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var username string
+		var email string
+		var phone string
+		err := rows.Scan(&username, &email, &phone)
+		if err != nil {
+			select {
+			case msg.ErrTo <- err:
+				return
+			default:
+				return
+			}
+		}
+
+		select {
+		case msg.ErrTo <- errors.New("User with data: username=" + username + " email=" + email + " phone=" + phone + " is exist before"):
+			return
+		default:
+			return
+		}
+	}
+
 	// saving to db
 	tx, err := w.db.Begin()
 	if err != nil {
@@ -140,7 +197,24 @@ func (w *registerUserWorker) Work(msg nanos.Message) {
 		}
 	}
 
-	stmt, err := tx.Prepare("insert into users (name) values (?)")
+	// stringify roles
+	var rolesString string
+	if len(userData.Roles) == 0 || userData.Roles == nil {
+		rolesString = ""
+	} else {
+		raw, err := json.Marshal(userData.Roles)
+		if err != nil {
+			select {
+			case msg.ErrTo <- err:
+				return
+			default:
+				return
+			}
+		}
+		rolesString = string(raw)
+	}
+
+	stmt, err := tx.Prepare("insert into users (name, username, email, phone, roles) values (?, ?, ?, ?, ?)")
 	if err != nil {
 		select {
 		case msg.ErrTo <- err:
@@ -151,7 +225,7 @@ func (w *registerUserWorker) Work(msg nanos.Message) {
 	}
 	defer stmt.Close()
 
-	result, err := stmt.Exec(userData.Name)
+	result, err := stmt.Exec(userData.Name, userData.Username, userData.Email, userData.Phone, rolesString)
 	if err != nil {
 		select {
 		case msg.ErrTo <- err:

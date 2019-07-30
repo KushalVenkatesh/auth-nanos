@@ -1,11 +1,11 @@
 package registerUser
 
 import (
-	"auth-nanos/entities"
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"github.com/bashar-saleh/auth-nanos/entities"
 	"github.com/bashar-saleh/gonanos/nanos"
 	"log"
 )

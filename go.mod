@@ -1,4 +1,4 @@
-module auth-nanos
+module github.com/bashar-saleh/auth-nanos
 
 go 1.12
 

@@ -1,9 +1,10 @@
 package registerUser
 
 import (
-	"auth-nanos/datastores"
-	"auth-nanos/entities"
+
 	"encoding/binary"
+	"github.com/bashar-saleh/auth-nanos/datastores"
+	"github.com/bashar-saleh/auth-nanos/entities"
 	"github.com/bashar-saleh/gonanos/nanos"
 	"regexp"
 	"testing"

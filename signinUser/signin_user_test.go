@@ -3,7 +3,10 @@ package signinUser
 import (
 	"encoding/json"
 	"github.com/bashar-saleh/auth-nanos/datastores"
+	"github.com/bashar-saleh/auth-nanos/entities"
 	"github.com/bashar-saleh/gonanos/nanos"
+	"golang.org/x/crypto/bcrypt"
+	"log"
 	"regexp"
 	"testing"
 	"time"
@@ -14,6 +17,190 @@ var failure = "\u2717"
 
 func TestSigninUser(t *testing.T) {
 	t.Run("testValidationRules", testValidationRules)
+	t.Run("Given username not exist in DB When we signin Then error is returned with msg //username or password is wrong//", signinNonExistUser)
+	t.Run("Given password is wrong When we signin Then error is returned with msg //username or password is wrong//", signinWrongPassword)
+	t.Run("Given username and password are correct When we signin Then user is returned ", signinValidData)
+}
+
+func signinValidData(t *testing.T) {
+	createUserInDB(entities.User{
+		Name:     "Bashar",
+		Username: "bashar_123",
+		Password: "bb123123",
+		Roles:    []string{"admin", "user"},
+	})
+	mailBox := NewSigninUserNanos(1, 2, datastores.SqliteConnection("test.db"), nil, nil)
+	var resTo = make(chan nanos.Message)
+	var errTo = make(chan error)
+
+	var content = struct {
+		FirstField string
+		Password   string
+	}{
+		FirstField: "bashar_123",
+		Password:   "bb123123",
+	}
+	rawContent, _ := json.Marshal(content)
+	mailBox <- nanos.Message{
+		Content: rawContent,
+		ResTo:   resTo,
+		ErrTo:   errTo,
+	}
+
+	select {
+	case res := <-resTo:
+		user, err := entities.UserFromBytes(res.Content)
+		if err != nil {
+			t.Errorf("\t%s\tError was happened when etracting user from message -- %s", failure, err.Error())
+			return
+		}
+		if (user.Username == "bashar_123") && (user.Name == "Bashar") && (len(user.Roles) == 2) {
+			t.Logf("\t%s\t Pass", succeed)
+			return
+		}
+		t.Errorf("\t%s\tthe returned user is not correct -- %v", failure, user)
+	case err := <-errTo:
+		t.Errorf("\t%s\t Nanos should not return any error -- %s", failure, err.Error())
+	case <-time.After(time.Second * 10):
+		t.Errorf("\t%s\terror timeout", failure)
+
+	}
+}
+
+func signinWrongPassword(t *testing.T) {
+
+	createUserInDB(entities.User{
+		Name:     "Bashar",
+		Username: "bashar_123",
+		Password: "!@#!!@#",
+	})
+	mailBox := NewSigninUserNanos(1, 2, datastores.SqliteConnection("test.db"), nil, nil)
+	var resTo = make(chan nanos.Message)
+	var errTo = make(chan error)
+
+	var content = struct {
+		FirstField string
+		Password   string
+	}{
+		FirstField: "bashar_123",
+		Password:   "123123",
+	}
+	rawContent, _ := json.Marshal(content)
+	mailBox <- nanos.Message{
+		Content: rawContent,
+		ResTo:   resTo,
+		ErrTo:   errTo,
+	}
+
+	select {
+	case _ = <-resTo:
+		t.Errorf("\t%s\tNanos shloud not return response", failure)
+	case err := <-errTo:
+		matched, _ := regexp.MatchString("username or password is wrong", err.Error())
+		if !matched {
+			t.Errorf("\t%s\terror message is not what supposed to be --  %s", failure, err.Error())
+			return
+		}
+		t.Logf("\t%s\t Pass", succeed)
+	case <-time.After(time.Second * 10):
+		t.Errorf("\t%s\terror timeout", failure)
+
+	}
+}
+
+func signinNonExistUser(t *testing.T) {
+	createUserInDB(entities.User{
+		Name:     "Bashar",
+		Username: "bashar_!@#",
+		Password: "123",
+	})
+	mailBox := NewSigninUserNanos(1, 2, datastores.SqliteConnection("test.db"), nil, nil)
+
+	var resTo = make(chan nanos.Message)
+	var errTo = make(chan error)
+	var content = struct {
+		FirstField string
+		Password   string
+	}{
+		FirstField: "bashar_123",
+		Password:   "qweqwe",
+	}
+	rawContent, _ := json.Marshal(content)
+
+	mailBox <- nanos.Message{
+		Content: rawContent,
+		ResTo:   resTo,
+		ErrTo:   errTo,
+	}
+
+	select {
+	case _ = <-resTo:
+		t.Errorf("\t%s\tNanos shloud not return response", failure)
+	case err := <-errTo:
+		matched, _ := regexp.MatchString("username or password is wrong", err.Error())
+		if !matched {
+			t.Errorf("\t%s\terror message is not what supposed to be --  %s", failure, err.Error())
+		}
+		t.Logf("\t%s\t Pass", succeed)
+	case <-time.After(time.Second * 10):
+		t.Errorf("\t%s\terror timeout", failure)
+
+	}
+
+}
+
+func createUserInDB(user entities.User) {
+	db := datastores.SqliteConnection("test.db")
+
+	// check if table exists
+	rows, err := db.Query("select name from sqlite_master where name='users' and type='table'")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if !rows.Next() {
+		// create users table
+		stmt := `
+			create table  users (
+			    	id integer not null primary key autoincrement, 
+			    	name text,
+			    	username text,
+			    	password varchar(250),
+			    	email text,
+			    	phone text,
+			    	roles text
+			                    );
+			delete from users;`
+		_, err = db.Exec(stmt)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	rows.Close()
+
+	// inserting user record
+	tx, _ := db.Begin()
+	stm, err := tx.Prepare("insert into users (name, username, email, phone, password, roles) values (?, ?, ?, ?, ?, ?)")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer stm.Close()
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.MinCost)
+	if err != nil {
+		log.Fatal(err)
+	}
+	roles, err := json.Marshal(user.Roles)
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, err = stm.Exec(user.Name, user.Username, user.Email, user.Phone, hashedPassword, roles)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	err = tx.Commit()
+	if err != nil {
+		log.Fatal(err.Error())
+	}
 }
 
 func testValidationRules(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/bashar-saleh/auth-nanos/entities"
 	"github.com/bashar-saleh/gonanos/nanos"
+	"golang.org/x/crypto/bcrypt"
 	"log"
 )
 
@@ -186,6 +187,10 @@ func (w *registerUserWorker) Work(msg nanos.Message) {
 		}
 	}
 
+	// hashing password
+	hashedPassword, err := w.hashPassword(userData.Password)
+
+
 	// saving to db
 	tx, err := w.db.Begin()
 	if err != nil {
@@ -214,7 +219,7 @@ func (w *registerUserWorker) Work(msg nanos.Message) {
 		rolesString = string(raw)
 	}
 
-	stmt, err := tx.Prepare("insert into users (name, username, email, phone, roles) values (?, ?, ?, ?, ?)")
+	stmt, err := tx.Prepare("insert into users (name, username, email, phone,password, roles) values (?, ?, ?, ?, ?, ?)")
 	if err != nil {
 		select {
 		case msg.ErrTo <- err:
@@ -225,7 +230,7 @@ func (w *registerUserWorker) Work(msg nanos.Message) {
 	}
 	defer stmt.Close()
 
-	result, err := stmt.Exec(userData.Name, userData.Username, userData.Email, userData.Phone, rolesString)
+	result, err := stmt.Exec(userData.Name, userData.Username, userData.Email, userData.Phone, hashedPassword, rolesString)
 	if err != nil {
 		select {
 		case msg.ErrTo <- err:
@@ -273,6 +278,14 @@ func (w *registerUserWorker) Work(msg nanos.Message) {
 
 }
 
+func (w *registerUserWorker) hashPassword(pass string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.MinCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hash), nil
+}
+
 func (w *registerUserWorker) prepareStore() {
 
 	// check if table exists
@@ -291,7 +304,7 @@ func (w *registerUserWorker) prepareStore() {
 			    	id integer not null primary key autoincrement, 
 			    	name text,
 			    	username text,
-			    	password text,
+			    	password varchar(250),
 			    	email text,
 			    	phone text,
 			    	roles text

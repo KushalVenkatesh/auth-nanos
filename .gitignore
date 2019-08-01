@@ -3,3 +3,4 @@ main.go
 *.exe
 */*.db
 .idea
+debug.log

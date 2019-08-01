@@ -359,8 +359,8 @@ func registerNewUser(t *testing.T) {
 	mailBox <- nanos.Message{Content: rawUser, ResTo: resTo, ErrTo: errTo,}
 
 	select {
-	case _ = <-errTo:
-		t.Error("Nanos should not return any error")
+	case err := <-errTo:
+		t.Errorf("Nanos should not return any error - %v", err)
 	case res := <-resTo:
 		id := int64(binary.LittleEndian.Uint64(res.Content))
 		if id != 1 {

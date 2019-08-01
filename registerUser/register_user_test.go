@@ -322,13 +322,14 @@ func testValidationRules(t *testing.T) {
 			case resMsg := <-resTo:
 				var id = int64(binary.LittleEndian.Uint64(resMsg.Content))
 				if id != data[i].id {
-					t.Errorf("\t\t%s\t [False] - data[%v].id != %v", failure, data[i].id, id)
+					t.Fatalf("\t\t%s\t [False] - data[%v].id != %v", failure, data[i].id, id)
 				}
 				t.Logf("\t\t%s\t [Pass]", succeed)
 			case err := <-errTo:
 				matched, _ := regexp.MatchString("length", err.Error())
 				if !matched {
-					t.Errorf("\t\t%s\t [Error] - data[%v] - %s", failure, i, "Nanos should return error msg with phrase // length //")
+					t.Fatalf("\t\t%s\t [Error] - data[%v] - %s", failure, i, "Nanos should return error msg with phrase // length //")
+
 				}
 				t.Logf("\t\t%s\t [Error] - data[%v] - %s", succeed, i, err.Error())
 

@@ -51,12 +51,12 @@ func signinValidData(t *testing.T) {
 	case res := <-resTo:
 		user, err := entities.UserFromBytes(res.Content)
 		if err != nil {
-			t.Errorf("\t%s\tError was happened when etracting user from message -- %s", failure, err.Error())
-			return
+			t.Fatalf("\t%s\tError was happened when etracting user from message -- %s", failure, err.Error())
+
 		}
 		if (user.Username == "bashar_123") && (user.Name == "Bashar") && (len(user.Roles) == 2) {
-			t.Logf("\t%s\t Pass", succeed)
-			return
+			t.Fatalf("\t%s\t Pass", succeed)
+
 		}
 		t.Errorf("\t%s\tthe returned user is not correct -- %v", failure, user)
 	case err := <-errTo:
@@ -98,8 +98,8 @@ func signinWrongPassword(t *testing.T) {
 	case err := <-errTo:
 		matched, _ := regexp.MatchString("username or password is wrong", err.Error())
 		if !matched {
-			t.Errorf("\t%s\terror message is not what supposed to be --  %s", failure, err.Error())
-			return
+			t.Fatalf("\t%s\terror message is not what supposed to be --  %s", failure, err.Error())
+
 		}
 		t.Logf("\t%s\t Pass", succeed)
 	case <-time.After(time.Second * 10):
@@ -135,7 +135,7 @@ func signinNonExistUser(t *testing.T) {
 
 	select {
 	case _ = <-resTo:
-		t.Errorf("\t%s\tNanos shloud not return response", failure)
+		t.Fatalf("\t%s\tNanos shloud not return response", failure)
 	case err := <-errTo:
 		matched, _ := regexp.MatchString("username or password is wrong", err.Error())
 		if !matched {

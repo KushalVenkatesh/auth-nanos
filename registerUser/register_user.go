@@ -66,95 +66,21 @@ func (w *registerUserWorker) Work(msg nanos.Message) {
 		}
 	}
 
-	// validate name
-	for i := range w.nameValidationRules {
-		isValid, nonValidMsg := w.nameValidationRules[i](userData.Name)
-		if !isValid {
-			select {
-			case msg.ErrTo <- errors.New(nonValidMsg):
-				return
-			default:
-				return
-			}
+	// validate user data
+	isValid, nonValidMsg := w.validate(userData)
+	if !isValid {
+		select {
+		case msg.ErrTo <- errors.New(nonValidMsg):
+			return
+		default:
+			return
 		}
 	}
 
-	// validate username
-	for i := range w.usernameValidationRules {
-		isValid, nonValidMsg := w.usernameValidationRules[i](userData.Username)
-		if !isValid {
-			select {
-			case msg.ErrTo <- errors.New(nonValidMsg):
-				return
-			default:
-				return
-			}
-		}
-	}
 
-	// validate password
-	for i := range w.passwordValidationRules {
-		isValid, nonValidMsg := w.passwordValidationRules[i](userData.Password)
-		if !isValid {
-			select {
-			case msg.ErrTo <- errors.New(nonValidMsg):
-				return
-			default:
-				return
-			}
-		}
-	}
-
-	// validate email
-	for i := range w.emailValidationRules {
-		isValid, nonValidMsg := w.emailValidationRules[i](userData.Email)
-		if !isValid {
-			select {
-			case msg.ErrTo <- errors.New(nonValidMsg):
-				return
-			default:
-				return
-			}
-		}
-	}
-
-	// validate phone
-	for i := range w.phoneValidationRules {
-		isValid, nonValidMsg := w.phoneValidationRules[i](userData.Phone)
-		if !isValid {
-			select {
-			case msg.ErrTo <- errors.New(nonValidMsg):
-				return
-			default:
-				return
-			}
-		}
-	}
 
 	// check if the username or email or phone exist before
-	q := "SELECT username, email, phone FROM users WHERE "
-	var qValus []interface{}
-
-	if userData.Username != "" {
-		q += "(username = ?) "
-		qValus = append(qValus, userData.Username)
-	} else {
-		q += "(0 = 1) "
-	}
-	if userData.Email != "" {
-		q += "OR (email = ?) "
-		qValus = append(qValus, userData.Email)
-	} else {
-		q += "OR (1 = 0) "
-	}
-	if userData.Phone != "" {
-		q += "OR (phone = ?) "
-		qValus = append(qValus, userData.Phone)
-	} else {
-		q += "OR (1 = 0) "
-	}
-
-	rows, err := w.db.Query(q, qValus...)
+	err = w.isUserExist(userData)
 	if err != nil {
 		select {
 		case msg.ErrTo <- err:
@@ -163,92 +89,10 @@ func (w *registerUserWorker) Work(msg nanos.Message) {
 			return
 		}
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var username string
-		var email string
-		var phone string
-		err := rows.Scan(&username, &email, &phone)
-		if err != nil {
-			select {
-			case msg.ErrTo <- err:
-				return
-			default:
-				return
-			}
-		}
-
-		select {
-		case msg.ErrTo <- errors.New("User with data: username=" + username + " email=" + email + " phone=" + phone + " is exist before"):
-			return
-		default:
-			return
-		}
-	}
-
-	// hashing password
-	hashedPassword, err := w.hashPassword(userData.Password)
 
 
 	// saving to db
-	tx, err := w.db.Begin()
-	if err != nil {
-		select {
-		case msg.ErrTo <- err:
-			return
-		default:
-			return
-		}
-	}
-
-	// stringify roles
-	var rolesString string
-	if len(userData.Roles) == 0 || userData.Roles == nil {
-		rolesString = ""
-	} else {
-		raw, err := json.Marshal(userData.Roles)
-		if err != nil {
-			select {
-			case msg.ErrTo <- err:
-				return
-			default:
-				return
-			}
-		}
-		rolesString = string(raw)
-	}
-
-	stmt, err := tx.Prepare("insert into users (name, username, email, phone,password, roles) values (?, ?, ?, ?, ?, ?)")
-	if err != nil {
-		select {
-		case msg.ErrTo <- err:
-			return
-		default:
-			return
-		}
-	}
-	defer stmt.Close()
-
-	result, err := stmt.Exec(userData.Name, userData.Username, userData.Email, userData.Phone, hashedPassword, rolesString)
-	if err != nil {
-		select {
-		case msg.ErrTo <- err:
-			return
-		default:
-			return
-		}
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		select {
-		case msg.ErrTo <- err:
-		default:
-			return
-		}
-	}
-
-	err = tx.Commit()
+	id, err := w.saveUserToDB(userData)
 	if err != nil {
 		select {
 		case msg.ErrTo <- err:
@@ -304,7 +148,7 @@ func (w *registerUserWorker) prepareStore() {
 			    	id integer not null primary key autoincrement, 
 			    	name text,
 			    	username text,
-			    	password varchar(250),
+			    	password text,
 			    	email text,
 			    	phone text,
 			    	roles text
@@ -315,4 +159,137 @@ func (w *registerUserWorker) prepareStore() {
 		log.Fatal(err)
 	}
 
+}
+
+func (w *registerUserWorker) validate(userData entities.User) (bool, string) {
+
+	// validate name
+	for i := range w.nameValidationRules {
+		isValid, nonValidMsg := w.nameValidationRules[i](userData.Name)
+		if !isValid {
+			return false, nonValidMsg
+		}
+	}
+
+	// validate username
+	for i := range w.usernameValidationRules {
+		isValid, nonValidMsg := w.usernameValidationRules[i](userData.Username)
+		if !isValid {
+			return false, nonValidMsg
+		}
+	}
+
+	// validate password
+	for i := range w.passwordValidationRules {
+		isValid, nonValidMsg := w.passwordValidationRules[i](userData.Password)
+		if !isValid {
+			return false, nonValidMsg
+		}
+	}
+
+	// validate email
+	for i := range w.emailValidationRules {
+		isValid, nonValidMsg := w.emailValidationRules[i](userData.Email)
+		if !isValid {
+			return false, nonValidMsg
+		}
+	}
+
+	// validate phone
+	for i := range w.phoneValidationRules {
+		isValid, nonValidMsg := w.phoneValidationRules[i](userData.Phone)
+		if !isValid {
+			return false, nonValidMsg
+		}
+	}
+
+	return true, ""
+}
+
+func (w *registerUserWorker) isUserExist(userData entities.User) error {
+	q := "SELECT username, email, phone FROM users WHERE "
+	var qValus []interface{}
+
+	if userData.Username != "" {
+		q += "(username = ?) "
+		qValus = append(qValus, userData.Username)
+	} else {
+		q += "(0 = 1) "
+	}
+	if userData.Email != "" {
+		q += "OR (email = ?) "
+		qValus = append(qValus, userData.Email)
+	} else {
+		q += "OR (1 = 0) "
+	}
+	if userData.Phone != "" {
+		q += "OR (phone = ?) "
+		qValus = append(qValus, userData.Phone)
+	} else {
+		q += "OR (1 = 0) "
+	}
+
+	rows, err := w.db.Query(q, qValus...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var username string
+		var email string
+		var phone string
+		err := rows.Scan(&username, &email, &phone)
+		if err != nil {
+			return err
+		}
+
+		return errors.New("User with data: username=" + username + " email=" + email + " phone=" + phone + " is exist before")
+
+	}
+	return nil
+}
+
+func (w *registerUserWorker) saveUserToDB(userData entities.User) (int64, error) {
+	tx, err := w.db.Begin()
+	if err != nil {
+		return 0, nil
+	}
+
+	// stringify roles
+	var rolesString string
+	if len(userData.Roles) == 0 || userData.Roles == nil {
+		rolesString = ""
+	} else {
+		raw, err := json.Marshal(userData.Roles)
+		if err != nil {
+			return 0, err
+		}
+		rolesString = string(raw)
+	}
+
+	stmt, err := tx.Prepare("insert into users (name, username, email, phone,password, roles) values (?, ?, ?, ?, ?, ?)")
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+
+	// hashing password
+	hashedPassword, err := w.hashPassword(userData.Password)
+
+	result, err := stmt.Exec(userData.Name, userData.Username, userData.Email, userData.Phone, hashedPassword, rolesString)
+	if err != nil {
+		return 0, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return 0, err
+	}
+
+	return id, nil
 }

@@ -4,16 +4,18 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"github.com/bashar-saleh/auth-nanos/entities"
 	"github.com/bashar-saleh/gonanos/nanos"
+	"github.com/dgrijalva/jwt-go"
 	"golang.org/x/crypto/bcrypt"
-	"log"
+	"time"
 )
 
 func NewSigninUserNanos(
 	workersMaxCount int,
 	taskQueueCapacity int,
 	db *sql.DB,
+	key string,
+	hours int,
 	firstFieldValidationRules []func(firstField string) (bool, string),
 	passwordValidationRules []func(password string) (bool, string),
 ) chan nanos.Message {
@@ -21,6 +23,8 @@ func NewSigninUserNanos(
 	myNanos := nanos.Nanos{
 		Worker: &signinUserWorker{
 			db:                        db,
+			key:                       key,
+			hours:                     hours,
 			firstFieldValidationRules: firstFieldValidationRules,
 			passwordValidationRules:   passwordValidationRules,
 		},
@@ -34,6 +38,8 @@ func NewSigninUserNanos(
 
 type signinUserWorker struct {
 	db                        *sql.DB
+	key                       string
+	hours                     int
 	firstFieldValidationRules []func(firstField string) (bool, string)
 	passwordValidationRules   []func(password string) (bool, string)
 }
@@ -82,7 +88,7 @@ func (w *signinUserWorker) Work(msg nanos.Message) {
 	}
 
 	// check if the first field exist in the db
-	rows, err := w.db.Query("SELECT  name, username, email, phone, password, roles FROM users WHERE (username == ?) OR (email == ?) OR (phone == ?)", content.FirstField, content.FirstField, content.FirstField)
+	rows, err := w.db.Query("SELECT  id, name, username, email, phone, password, roles FROM users WHERE (username == ?) OR (email == ?) OR (phone == ?)", content.FirstField, content.FirstField, content.FirstField)
 	if err != nil {
 		select {
 		case msg.ErrTo <- err:
@@ -100,13 +106,14 @@ func (w *signinUserWorker) Work(msg nanos.Message) {
 			return
 		}
 	}
+	var id int
 	var name string
 	var username string
 	var email string
 	var phone string
 	var hashedPassword string
 	var rawRoles string
-	err = rows.Scan(&name, &username, &email, &phone, &hashedPassword, &rawRoles)
+	err = rows.Scan(&id, &name, &username, &email, &phone, &hashedPassword, &rawRoles)
 	if err != nil {
 		select {
 		case msg.ErrTo <- err:
@@ -127,14 +134,12 @@ func (w *signinUserWorker) Work(msg nanos.Message) {
 		}
 	}
 
-
-
-	// return the correspond user
+	// return jwt token
 	var roles []string
 	if rawRoles == "" {
 		roles = nil
-	}else {
-	err = json.Unmarshal([]byte(rawRoles), &roles)
+	} else {
+		err = json.Unmarshal([]byte(rawRoles), &roles)
 		if err != nil {
 			select {
 			case msg.ErrTo <- err:
@@ -144,17 +149,7 @@ func (w *signinUserWorker) Work(msg nanos.Message) {
 			}
 		}
 	}
-
-	user := entities.User{
-		Name:     name,
-		Username: username,
-		Email:    email,
-		Phone:    phone,
-		Roles:    roles,
-	}
-	log.Println(user)
-
-	rawUser, err := user.ToByte()
+	token, err := w.createToken(id, roles)
 	if err != nil {
 		select {
 		case msg.ErrTo <- err:
@@ -165,10 +160,38 @@ func (w *signinUserWorker) Work(msg nanos.Message) {
 	}
 
 	select {
-	case msg.ResTo <- nanos.Message{Content: rawUser}:
+	case msg.ResTo <- nanos.Message{Content: []byte(token)}:
 		return
 	default:
 		return
 	}
 
+}
+
+func (w *signinUserWorker) createToken(ID int, roles []string) (string, error) {
+	jwtKey := []byte(w.key)
+	exp := time.Now().Add(time.Duration(w.hours) * time.Hour)
+
+	claims := claims{
+		ID:    ID,
+		Roles: roles,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: exp.Unix(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, &claims)
+	tokenString, err := token.SignedString(jwtKey)
+
+	if err != nil {
+		return "", err
+	}
+
+	return tokenString, nil
+}
+
+type claims struct {
+	ID    int   `json:"id"`
+	Roles []string `json:"roles"`
+	jwt.StandardClaims
 }

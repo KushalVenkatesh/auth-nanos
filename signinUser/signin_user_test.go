@@ -5,6 +5,7 @@ import (
 	"github.com/bashar-saleh/auth-nanos/datastores"
 	"github.com/bashar-saleh/auth-nanos/entities"
 	"github.com/bashar-saleh/gonanos/nanos"
+	"github.com/dgrijalva/jwt-go"
 	"golang.org/x/crypto/bcrypt"
 	"log"
 	"regexp"
@@ -19,7 +20,7 @@ func TestSigninUser(t *testing.T) {
 	t.Run("testValidationRules", testValidationRules)
 	t.Run("Given username not exist in DB When we signin Then error is returned with msg //username or password is wrong//", signinNonExistUser)
 	t.Run("Given password is wrong When we signin Then error is returned with msg //username or password is wrong//", signinWrongPassword)
-	t.Run("Given username and password are correct When we signin Then user is returned ", signinValidData)
+	t.Run("Given username and password are correct When we signin Then jwt token is returned ", signinValidData)
 }
 
 func signinValidData(t *testing.T) {
@@ -29,7 +30,7 @@ func signinValidData(t *testing.T) {
 		Password: "bb123123",
 		Roles:    []string{"admin", "user"},
 	})
-	mailBox := NewSigninUserNanos(1, 2, datastores.SqliteConnection("test.db"), nil, nil)
+	mailBox := NewSigninUserNanos(1, 2, datastores.SqliteConnection("test.db"), "secretKey", 4, nil, nil)
 	var resTo = make(chan nanos.Message)
 	var errTo = make(chan error)
 
@@ -49,16 +50,24 @@ func signinValidData(t *testing.T) {
 
 	select {
 	case res := <-resTo:
-		user, err := entities.UserFromBytes(res.Content)
+		token := string(res.Content)
+		claims := claims{}
+		tkn, err := jwt.ParseWithClaims(token, &claims, func(token *jwt.Token) (interface{}, error) {
+			return []byte("secretKey"), nil
+		})
 		if err != nil {
-			t.Fatalf("\t%s\tError was happened when etracting user from message -- %s", failure, err.Error())
-
+			t.Fatalf("\t%s\tError was happened when extracting user from message -- %s", failure, err.Error())
 		}
-		if (user.Username == "bashar_123") && (user.Name == "Bashar") && (len(user.Roles) == 2) {
-			t.Fatalf("\t%s\t Pass", succeed)
-
+		if !tkn.Valid {
+			t.Fatalf("\t%s\tToken is Invalid", failure)
 		}
-		t.Errorf("\t%s\tthe returned user is not correct -- %v", failure, user)
+
+		if (claims.ID == 1) && (len(claims.Roles) == 2) {
+			t.Logf("\t%s\t Pass", succeed)
+			return
+		}
+
+		t.Errorf("\t%s\tthe returned token is not correct -- %v", failure, claims)
 	case err := <-errTo:
 		t.Errorf("\t%s\t Nanos should not return any error -- %s", failure, err.Error())
 	case <-time.After(time.Second * 10):
@@ -74,7 +83,7 @@ func signinWrongPassword(t *testing.T) {
 		Username: "bashar_123",
 		Password: "!@#!!@#",
 	})
-	mailBox := NewSigninUserNanos(1, 2, datastores.SqliteConnection("test.db"), nil, nil)
+	mailBox := NewSigninUserNanos(1, 2, datastores.SqliteConnection("test.db"), "secretKey", 4, nil, nil)
 	var resTo = make(chan nanos.Message)
 	var errTo = make(chan error)
 
@@ -114,7 +123,7 @@ func signinNonExistUser(t *testing.T) {
 		Username: "bashar_!@#",
 		Password: "123",
 	})
-	mailBox := NewSigninUserNanos(1, 2, datastores.SqliteConnection("test.db"), nil, nil)
+	mailBox := NewSigninUserNanos(1, 2, datastores.SqliteConnection("test.db"), "secretKey", 4, nil, nil)
 
 	var resTo = make(chan nanos.Message)
 	var errTo = make(chan error)
@@ -267,6 +276,8 @@ func testValidationRules(t *testing.T) {
 				1,
 				1000,
 				db,
+				"secretKey",
+				5,
 				data[i].firstFieldValidationRules,
 				data[i].passwordValidationRules,
 

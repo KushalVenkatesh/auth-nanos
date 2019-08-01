@@ -7,8 +7,10 @@ import (
 	"errors"
 	"github.com/bashar-saleh/auth-nanos/entities"
 	"github.com/bashar-saleh/gonanos/nanos"
+	"github.com/dgrijalva/jwt-go"
 	"golang.org/x/crypto/bcrypt"
 	"log"
+	"time"
 )
 
 func NewRegisterUserNanos(
@@ -293,3 +295,5 @@ func (w *registerUserWorker) saveUserToDB(userData entities.User) (int64, error)
 
 	return id, nil
 }
+
+

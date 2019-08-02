@@ -1,6 +1,7 @@
 package validateJWT
 
 import (
+	"encoding/json"
 	"errors"
 	"github.com/bashar-saleh/gonanos/nanos"
 	"github.com/dgrijalva/jwt-go"
@@ -41,21 +42,39 @@ func (w *validateJWTWorker) Work(msg nanos.Message) {
 		}
 	}
 	token := string(msg.Content)
-	var claims claims
+
+	// extract claims from token
+	var claims Claims
 	err := w.claimsFromToken(token, &claims)
 	if err != nil {
 		select {
-		case msg.ErrTo <- err :
+		case msg.ErrTo <- err:
+			return
+		default:
+			return
+		}
+	}
+	rawClaims, err := json.Marshal(claims)
+	if err != nil {
+		select {
+		case msg.ErrTo <- err:
 			return
 		default:
 			return
 		}
 	}
 
+	// sending the response back
+	select {
+	case msg.ResTo <- nanos.Message{Content: rawClaims}:
+		return
+	default:
+		return
+	}
 
 }
 
-func (w *validateJWTWorker) claimsFromToken(token string, claims *claims) error {
+func (w *validateJWTWorker) claimsFromToken(token string, claims *Claims) error {
 
 	tkn, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (interface{}, error) {
 		return []byte(w.key), nil
@@ -64,14 +83,13 @@ func (w *validateJWTWorker) claimsFromToken(token string, claims *claims) error 
 		return err
 	}
 	if !tkn.Valid {
-		return  errors.New("token is not valid")
+		return errors.New("token is not valid")
 	}
-	return  nil
+	return nil
 }
 
-
-type claims struct {
-	ID    int   `json:"id"`
+type Claims struct {
+	ID    int      `json:"id"`
 	Roles []string `json:"roles"`
 	jwt.StandardClaims
 }
